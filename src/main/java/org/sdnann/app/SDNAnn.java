@@ -11,7 +11,9 @@ import org.onosproject.cfg.ComponentConfigService;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.core.CoreService;
 import org.onosproject.net.AnnotationKeys;
+import org.onosproject.net.ConnectPoint;
 import org.onosproject.net.DefaultAnnotations;
+import org.onosproject.net.DefaultLink;
 import org.onosproject.net.Device;
 import org.onosproject.net.DeviceId;
 import org.onosproject.net.Link;
@@ -35,6 +37,9 @@ import org.onosproject.net.provider.AbstractProvider;
 import org.onosproject.net.provider.ProviderId;
 import org.osgi.service.component.ComponentContext;
 import org.slf4j.Logger;
+
+import java.util.Map;
+import java.util.HashMap;
 
 import static org.slf4j.LoggerFactory.getLogger;
 
@@ -74,9 +79,17 @@ public class SDNAnn {
 
     private LnkListener lnkListener;
 
+    private Map<ConnectPoint, ConnectPoint> linkMap;
+
+    private void initLinkMap() {
+        linkMap = new HashMap<>();
+    }
+
     @Activate
     public void activate(ComponentContext context) {
         appId = coreService.registerApplication("org.sdnann.app");
+
+        initLinkMap();
 
         deviceRegistry = DefaultServiceDirectory.getService(DeviceProviderRegistry.class);
         deviceProvider = new DeviceAnnotationProvider();
@@ -112,6 +125,9 @@ public class SDNAnn {
     private void annotateDevices() {
         for (Device device : deviceService.getDevices()) {
             annotateDevice(device);
+            for (Port port : deviceService.getPorts(device.id())) {
+                addPortLinks(port);
+            }
         }
     }
 
@@ -157,6 +173,31 @@ public class SDNAnn {
             if (event.type() == DeviceEvent.Type.DEVICE_ADDED) {
                 annotateDevice(event.subject());
             }
+
+            if (event.type() == DeviceEvent.Type.DEVICE_ADDED ||
+                    event.type() == DeviceEvent.Type.PORT_ADDED ||
+                    event.type() == DeviceEvent.Type.PORT_UPDATED) {
+                for (Port port : deviceService.getPorts(event.subject().id())) {
+                    addPortLinks(port);
+                }
+            }
+        }
+    }
+
+    private void addPortLinks(Port port) {
+        if (!port.isEnabled()) {
+            return;
+        }
+        ConnectPoint cp = new ConnectPoint(port.element().id(), port.number());
+        if (linkMap.containsKey(cp)) {
+            ConnectPoint dstcp = linkMap.get(cp);
+            Port dstport = deviceService.getPort(dstcp.deviceId(), dstcp.port());
+            if (dstport.isEnabled()) {
+                // add link
+                Link link = new DefaultLink(PID, cp, dstcp, Link.Type.INDIRECT);
+                log.info("Adding new port link, {} {}", cp, dstcp);
+                annotateLink(link);
+            }
         }
     }
 
@@ -176,7 +217,7 @@ public class SDNAnn {
 
         @Override
         public boolean isReachable(DeviceId deviceId) {
-            return false;
+            return true;
         }
     }
 
